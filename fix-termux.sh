@@ -10,7 +10,7 @@ echo "Ensuring system is up to date..."
 pkg update -y && pkg upgrade -y
 
 # 2. Reinstall core libraries
-echo "Reinstalling libc++ and nodejs-lts..."
+echo "Reinstalling libc++ and nodejs..."
 pkg install -y libc++ nodejs build-essential
 
 # 3. Fix symlinks for common libraries

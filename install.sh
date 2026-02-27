@@ -10,8 +10,8 @@ echo "[1/5] Updating Termux packages..."
 pkg update -y && pkg upgrade -y
 
 # 2. Install essential dependencies
-echo "[2/5] Installing core dependencies (Node.js, Git, Python, MariaDB, build-essential)..."
-pkg install -y nodejs git python mariadb postgresql tar curl build-essential binutils libc++
+echo "[2/5] Installing core dependencies (Node.js, Git, MariaDB, build-essential)..."
+pkg install -y nodejs git mariadb postgresql tar curl build-essential binutils libc++
 
 # 3. Clone Repository
 echo "[3/5] Cloning HostCore repository..."
