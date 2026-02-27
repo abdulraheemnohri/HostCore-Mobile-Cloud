@@ -52,6 +52,22 @@
             </div>
         </div>
 
+        <div class="card p-4 mb-4">
+            <h4>Security</h4>
+            <hr>
+            <form id="passwordForm">
+                <div class="mb-3">
+                    <label class="form-label">Old Password</label>
+                    <input type="password" id="oldPassword" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">New Password</label>
+                    <input type="password" id="newPassword" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-outline-primary">Change Password</button>
+            </form>
+        </div>
+
         <div class="card p-4">
             <h4>Maintenance</h4>
             <hr>
@@ -162,6 +178,28 @@
                 else showAlert('Wipe failed', 'danger');
             }
         }
+
+        document.getElementById('passwordForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const oldPassword = document.getElementById('oldPassword').value;
+            const newPassword = document.getElementById('newPassword').value;
+
+            const res = await fetch('/api/auth/change-password', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ oldPassword, newPassword })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showAlert('Password changed successfully', 'success');
+                e.target.reset();
+            } else {
+                showAlert(data.message, 'danger');
+            }
+        };
 
         loadSettings();
         checkNgrok();

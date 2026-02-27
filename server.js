@@ -11,6 +11,7 @@ const multer = require('multer');
 const AdmZip = require('adm-zip');
 const ngrok = require('ngrok');
 const cron = require('node-cron');
+const rateLimit = require('express-rate-limit');
 const { exec } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -46,10 +47,29 @@ dirs.forEach(dir => {
 
 app.use(express.json());
 
+// Rate Limiting
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: { message: 'Too many requests from this IP, please try again after 15 minutes' }
+});
+
+const authLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 10, // Limit each IP to 10 login/register requests per hour
+    message: { message: 'Too many authentication attempts, please try again after an hour' }
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/auth/', authLimiter);
+
 // Reverse Proxy Middleware
 app.use((req, res, next) => {
     // Reserved system routes
-    const reserved = ['api', 'login.html', 'dashboard.html', 'deploy.html', 'apps.html', 'db.html', 'settings.html', 'socket.io'];
+    const reserved = [
+        'api', 'login.html', 'dashboard.html', 'deploy.html', 'apps.html', 'db.html', 'settings.html',
+        'socket.io', 'assets', 'static', 'favicon.ico', 'manifest.json'
+    ];
 
     // Check if path starts with an app route
     // Expected path: /appname/path
@@ -117,6 +137,7 @@ function initDb() {
             user_id INTEGER,
             memory_limit INTEGER,
             cpu_limit INTEGER,
+            env_vars TEXT,
             FOREIGN KEY(user_id) REFERENCES users(id)
         )`);
 
@@ -181,6 +202,27 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json(req.user);
 });
 
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) return res.status(400).json({ message: 'Missing fields' });
+
+    db.get(`SELECT * FROM users WHERE id = ?`, [req.user.id], async (err, user) => {
+        if (err || !user) return res.status(404).json({ message: 'User not found' });
+
+        const validPassword = await bcrypt.compare(oldPassword, user.password);
+        if (!validPassword) return res.status(400).json({ message: 'Invalid old password' });
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        db.run(`UPDATE users SET password = ? WHERE id = ?`, [hashedNewPassword, req.user.id], (err) => {
+            if (err) {
+                console.error('Update failed:', err);
+                return res.status(500).json({ message: 'Update failed' });
+            }
+            res.json({ message: 'Password updated' });
+        });
+    });
+});
+
 // Settings API
 app.get('/api/settings', authenticateToken, (req, res) => {
     db.all(`SELECT * FROM settings`, [], (err, rows) => {
@@ -239,6 +281,24 @@ app.get('/api/ngrok/status', authenticateToken, (req, res) => {
 });
 
 // Database Management API
+app.get('/api/database/query/:table', authenticateToken, (req, res) => {
+    const { table } = req.params;
+    const allowedTables = ['apps', 'settings'];
+    if (!allowedTables.includes(table)) return res.status(403).json({ message: 'Table access denied' });
+
+    let sql = `SELECT * FROM ${table}`;
+    let params = [];
+    if (table === 'apps') {
+        sql += ` WHERE user_id = ?`;
+        params = [req.user.id];
+    }
+
+    db.all(sql, params, (err, rows) => {
+        if (err) return res.status(500).json({ message: err.message });
+        res.json(rows);
+    });
+});
+
 app.get('/api/database/status', authenticateToken, (req, res) => {
     // In Termux, we check if mysql/psql commands work or if services are up
     exec('pgrep -x mariadbd || pgrep -x mysqld', (err1) => {
@@ -278,6 +338,27 @@ cron.schedule('0 0 * * *', () => {
     });
 });
 
+// Health Check API
+app.get('/api/apps/:name/health', authenticateToken, (req, res) => {
+    const { name } = req.params;
+    db.get(`SELECT port FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, row) => {
+        if (err || !row) return res.status(404).json({ message: 'App not found' });
+
+        const client = http.get(`http://localhost:${row.port}`, { timeout: 2000 }, (response) => {
+            res.json({ status: 'healthy', statusCode: response.statusCode });
+        });
+
+        client.on('error', (e) => {
+            res.json({ status: 'unhealthy', error: e.message });
+        });
+
+        client.on('timeout', () => {
+            client.destroy();
+            res.json({ status: 'timeout' });
+        });
+    });
+});
+
 // File Manager API
 app.get('/api/apps/:name/files', authenticateToken, (req, res) => {
     const { name } = req.params;
@@ -290,7 +371,9 @@ app.get('/api/apps/:name/files', authenticateToken, (req, res) => {
         const targetPath = path.join(appDir, subPath);
 
         // Safety check to prevent directory traversal
-        if (!targetPath.startsWith(appDir)) {
+        const absoluteAppDir = path.resolve(appDir);
+        const absoluteTargetPath = path.resolve(targetPath);
+        if (!absoluteTargetPath.startsWith(absoluteAppDir)) {
             return res.status(403).json({ message: 'Access denied' });
         }
 
@@ -325,11 +408,18 @@ app.post('/api/apps/:name/start', authenticateToken, (req, res) => {
 
         pm2.connect((err) => {
             if (err) return res.status(500).json({ message: 'PM2 connect error' });
+
+            let env = {};
+            try {
+                if (appRecord.env_vars) env = JSON.parse(appRecord.env_vars);
+            } catch (e) {}
+
             pm2.start({
                 name: appRecord.name,
                 script: appRecord.path,
                 cwd: path.dirname(appRecord.path),
                 max_memory_restart: appRecord.memory_limit ? `${appRecord.memory_limit}M` : undefined,
+                env: { ...env, PORT: appRecord.port }
             }, (err) => {
                 if (err) return res.status(500).json({ message: 'PM2 start error' });
                 db.run(`UPDATE apps SET status = 'running' WHERE name = ?`, [name], () => {
@@ -364,10 +454,15 @@ app.delete('/api/apps/:name', authenticateToken, (req, res) => {
         pm2.connect((err) => {
             if (err) return res.status(500).json({ message: 'PM2 connect error' });
             pm2.delete(name, (err) => {
-                // Remove from DB and potentially delete files
+                const appDir = path.join(__dirname, 'apps', appRecord.name);
+
+                // Remove from DB
                 db.run(`DELETE FROM apps WHERE name = ?`, [name], () => {
-                    // Logic to delete app files could go here
-                    res.json({ message: 'App deleted' });
+                    // Delete files
+                    if (fs.existsSync(appDir)) {
+                        fs.rmSync(appDir, { recursive: true, force: true });
+                    }
+                    res.json({ message: 'App and files deleted' });
                 });
             });
         });
@@ -375,6 +470,18 @@ app.delete('/api/apps/:name', authenticateToken, (req, res) => {
 });
 
 app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, res) => {
+    // Quota Check
+    const count = await new Promise(resolve => {
+        db.get(`SELECT COUNT(*) as count FROM apps WHERE user_id = ?`, [req.user.id], (err, row) => {
+            resolve(row ? row.count : 0);
+        });
+    });
+
+    if (count >= 5) {
+        if (req.file) fs.unlinkSync(req.file.path);
+        return res.status(403).json({ message: 'Quota exceeded: Max 5 apps per user' });
+    }
+
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
 
     const zipPath = req.file.path;
@@ -407,6 +514,12 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
             type = 'python';
             entryPoint = path.join(targetDir, 'app.py');
             installCmd = fs.existsSync(path.join(targetDir, 'requirements.txt')) ? 'pip install -r requirements.txt' : '';
+        } else if (fs.existsSync(path.join(targetDir, 'index.php')) || fs.existsSync(path.join(targetDir, 'wp-config.php'))) {
+            type = 'php';
+            entryPoint = path.join(targetDir, 'index.php');
+            // Check if php is available
+            const hasPhp = await new Promise(resolve => exec('php -v', err => resolve(!err)));
+            if (!hasPhp) throw new Error('PHP is not installed in Termux');
         }
 
         // Port Assignment
@@ -428,18 +541,20 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                 pm2.connect((err) => {
                     if (err) return res.status(500).json({ message: 'PM2 connect error' });
 
+                    let customEnv = {};
+                    try {
+                        if (req.body.envVars) customEnv = JSON.parse(req.body.envVars);
+                    } catch (e) {}
+
                     const pm2Config = {
                         name: appName,
                         script: entryPoint || targetDir, // static fallback
                         cwd: targetDir,
-                        env: { PORT: port },
+                        env: { ...customEnv, PORT: port },
                         max_memory_restart: req.body.memoryLimit ? `${req.body.memoryLimit}M` : undefined,
                     };
 
                     if (type === 'static') {
-                        // For static apps, we might need a simple server
-                        // For now let's assume we don't start it via PM2 or we start a simple serve
-                        // Actually let's just use a simple express server for static
                         fs.writeFileSync(path.join(targetDir, 'hc-static-server.js'), `
                             const express = require('express');
                             const app = express();
@@ -447,6 +562,11 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                             app.listen(process.env.PORT);
                         `);
                         pm2Config.script = path.join(targetDir, 'hc-static-server.js');
+                    } else if (type === 'php') {
+                        // Use PM2 to start php built-in server
+                        pm2Config.script = 'php';
+                        pm2Config.args = ['-S', `localhost:${port}`, '-t', targetDir];
+                        pm2Config.interpreter = 'none';
                     }
 
                     pm2.start(pm2Config, (err) => {
@@ -455,8 +575,8 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                             return res.status(500).json({ message: 'PM2 start error' });
                         }
 
-                        db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route, user_id, memory_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [appName, type, port, 'running', pm2Config.script, `/${appName}`, req.user.id, req.body.memoryLimit || null],
+                        db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route, user_id, memory_limit, env_vars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [appName, type, port, 'running', pm2Config.script, `/${appName}`, req.user.id, req.body.memoryLimit || null, req.body.envVars || null],
                             (err) => {
                                 if (err) console.error('DB Insert Error:', err);
                                 res.json({
@@ -479,18 +599,17 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
 
 app.get('/api/apps/:name/logs', authenticateToken, (req, res) => {
     const { name } = req.params;
+    const limit = req.query.limit ? parseInt(req.query.limit) : 5000;
 
     db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
         if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
 
-        // PM2 doesn't easily provide logs via API in a string format,
-    // usually we'd read the log files.
-    const logPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-out.log`);
-    const errorLogPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-error.log`);
+        const logPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-out.log`);
+        const errorLogPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-error.log`);
 
         try {
-            const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-5000) : '';
-            const err = fs.existsSync(errorLogPath) ? fs.readFileSync(errorLogPath, 'utf8').slice(-5000) : '';
+            const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-limit) : '';
+            const err = fs.existsSync(errorLogPath) ? fs.readFileSync(errorLogPath, 'utf8').slice(-limit) : '';
             res.json({ out, err });
         } catch (e) {
             res.status(500).json({ message: 'Error reading logs' });
@@ -498,7 +617,23 @@ app.get('/api/apps/:name/logs', authenticateToken, (req, res) => {
     });
 });
 
+app.post('/api/apps/:name/logs/clear', authenticateToken, (req, res) => {
+    const { name } = req.params;
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found' });
+
+        pm2.connect((err) => {
+            if (err) return res.status(500).json({ message: 'PM2 error' });
+            pm2.flush(name, (err) => {
+                res.json({ message: 'Logs cleared' });
+            });
+        });
+    });
+});
+
 // WebSocket Monitoring
+pm2.connect(() => {}); // Ensure PM2 is connected for monitoring
+
 io.on('connection', (socket) => {
     console.log('Client connected to monitoring');
 
@@ -506,9 +641,10 @@ io.on('connection', (socket) => {
         try {
             const cpu = await si.currentLoad();
             const mem = await si.mem();
+            const disk = await si.fsSize();
             const processes = await new Promise((resolve) => {
                 pm2.list((err, list) => {
-                    if (err) resolve([]);
+                    if (err) return resolve([]);
                     resolve(list.map(p => ({
                         name: p.name,
                         cpu: p.monit.cpu,
@@ -522,6 +658,7 @@ io.on('connection', (socket) => {
                 mem: (mem.active / mem.total) * 100,
                 memUsed: mem.active,
                 memTotal: mem.total,
+                disk: disk[0] ? disk[0].use : 0,
                 apps: processes,
                 uptime: os.uptime()
             });

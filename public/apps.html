@@ -36,13 +36,22 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">Application Logs</h5>
+                    <div class="ms-auto me-2">
+                        <button class="btn btn-sm btn-outline-danger" onclick="clearLogs(currentLogApp)">Clear Logs</button>
+                    </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <h6>Standard Output</h6>
-                    <pre id="stdout" class="bg-dark text-light p-3 rounded" style="max-height: 200px; overflow-y: auto;"></pre>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6>Standard Output</h6>
+                        <div class="form-check form-switch">
+                          <input class="form-check-input" type="checkbox" id="autoRefreshLogs">
+                          <label class="form-check-label small" for="autoRefreshLogs">Auto Refresh</label>
+                        </div>
+                    </div>
+                    <pre id="stdout" class="bg-dark text-light p-3 rounded" style="max-height: 250px; overflow-y: auto; font-size: 0.85rem;"></pre>
                     <h6>Error Output</h6>
-                    <pre id="stderr" class="bg-dark text-danger p-3 rounded" style="max-height: 200px; overflow-y: auto;"></pre>
+                    <pre id="stderr" class="bg-dark text-danger p-3 rounded" style="max-height: 150px; overflow-y: auto; font-size: 0.85rem;"></pre>
                 </div>
             </div>
         </div>
@@ -51,6 +60,8 @@
     <script>
         const token = localStorage.getItem('token');
         if (!token) window.location.href = '/login.html';
+        let currentLogApp = '';
+        let logInterval = null;
 
         async function loadApps() {
             const res = await fetch('/api/apps', {
@@ -62,6 +73,7 @@
 
             apps.forEach(app => {
                 const col = document.createElement('div');
+                setTimeout(() => checkHealth(app.name), 100);
                 col.className = 'col-md-6';
                 col.innerHTML = `
                     <div class="card p-3">
@@ -72,7 +84,8 @@
                         <p class="small text-muted mb-3">
                             Port: <strong>${app.port}</strong><br>
                             Route: <a href="${app.route}" target="_blank">${app.route}</a><br>
-                            Status: <span class="status-${app.status}">${app.status.toUpperCase()}</span>
+                            Status: <span class="status-${app.status}">${app.status.toUpperCase()}</span><br>
+                            Health: <span id="health-${app.name}" class="small text-muted">checking...</span>
                         </p>
                         <div class="d-flex gap-2">
                             ${app.status === 'running'
@@ -107,13 +120,76 @@
         }
 
         async function viewLogs(name) {
-            const res = await fetch(`/api/apps/${name}/logs`, {
+            currentLogApp = name;
+            const res = await fetch(`/api/apps/${name}/logs?limit=10000`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
             document.getElementById('stdout').innerText = data.out || 'No output logs.';
             document.getElementById('stderr').innerText = data.err || 'No error logs.';
-            new bootstrap.Modal(document.getElementById('logsModal')).show();
+
+            const modalEl = document.getElementById('logsModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+
+            if (!logInterval) {
+                logInterval = setInterval(() => {
+                    if (document.getElementById('autoRefreshLogs').checked) {
+                        fetchLogs(name);
+                    }
+                }, 3000);
+            }
+        }
+
+        async function fetchLogs(name) {
+            const res = await fetch(`/api/apps/${name}/logs?limit=5000`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            const stdout = document.getElementById('stdout');
+            const stderr = document.getElementById('stderr');
+
+            const shouldScrollStdout = stdout.scrollTop + stdout.clientHeight === stdout.scrollHeight;
+            const shouldScrollStderr = stderr.scrollTop + stderr.clientHeight === stderr.scrollHeight;
+
+            stdout.innerText = data.out || 'No output logs.';
+            stderr.innerText = data.err || 'No error logs.';
+
+            if (shouldScrollStdout) stdout.scrollTop = stdout.scrollHeight;
+            if (shouldScrollStderr) stderr.scrollTop = stderr.scrollHeight;
+        }
+
+        async function clearLogs(name) {
+            if (!confirm('Clear all logs for this app?')) return;
+            await fetch(`/api/apps/${name}/logs/clear`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            fetchLogs(name);
+        }
+
+        document.getElementById('logsModal').addEventListener('hidden.bs.modal', () => {
+            clearInterval(logInterval);
+            logInterval = null;
+        });
+
+        async function checkHealth(name) {
+            try {
+                const res = await fetch(`/api/apps/${name}/health`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                const el = document.getElementById(`health-${name}`);
+                if (!el) return;
+                if (data.status === 'healthy') {
+                    el.innerHTML = '<span class="text-success">● Healthy</span>';
+                } else {
+                    el.innerHTML = '<span class="text-danger">● Unhealthy</span>';
+                }
+            } catch (e) {
+                const el = document.getElementById(`health-${name}`);
+                if (el) el.innerText = 'N/A';
+            }
         }
 
         loadApps();
@@ -151,7 +227,7 @@
 
         async function viewFiles(name, path = '') {
             currentAppName = name;
-            const res = await fetch(`/api/apps/${name}/files?path=${path}`, {
+            const res = await fetch(`/api/apps/${name}/files?path=${encodeURIComponent(path)}`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
