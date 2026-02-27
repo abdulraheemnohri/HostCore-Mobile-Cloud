@@ -9,6 +9,8 @@ const si = require('systeminformation');
 const { Server } = require('socket.io');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
+const ngrok = require('ngrok');
+const cron = require('node-cron');
 const { exec } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -32,6 +34,15 @@ const upload = multer({ storage: storage });
 const proxy = httpProxy.createProxyServer({});
 const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.SECRET_KEY || 'hostcore_secret_key';
+
+// Ensure required directories exist
+const dirs = ['apps', 'uploads', 'backups', 'logs'];
+dirs.forEach(dir => {
+    const dirPath = path.join(__dirname, dir);
+    if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+    }
+});
 
 app.use(express.json());
 
@@ -99,7 +110,16 @@ function initDb() {
             port INTEGER,
             status TEXT,
             path TEXT,
-            route TEXT
+            route TEXT,
+            user_id INTEGER,
+            memory_limit INTEGER,
+            cpu_limit INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )`);
+
+        db.run(`CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
         )`);
     });
 }
@@ -158,9 +178,138 @@ app.get('/api/auth/me', authenticateToken, (req, res) => {
     res.json(req.user);
 });
 
+// Settings API
+app.get('/api/settings', authenticateToken, (req, res) => {
+    db.all(`SELECT * FROM settings`, [], (err, rows) => {
+        if (err) return res.status(500).json({ message: err.message });
+        const settings = {};
+        rows.forEach(row => settings[row.key] = row.value);
+        res.json(settings);
+    });
+});
+
+app.post('/api/settings', authenticateToken, (req, res) => {
+    const { settings } = req.body;
+    if (!settings) return res.status(400).json({ message: 'No settings provided' });
+
+    const stmt = db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`);
+    Object.keys(settings).forEach(key => {
+        stmt.run(key, settings[key]);
+    });
+    stmt.finalize(() => {
+        res.json({ message: 'Settings saved' });
+    });
+});
+
+// Ngrok API
+let ngrokUrl = null;
+app.post('/api/ngrok/start', authenticateToken, async (req, res) => {
+    db.get(`SELECT value FROM settings WHERE key = 'ngrok_token'`, async (err, row) => {
+        const token = row ? row.value : null;
+        if (!token) return res.status(400).json({ message: 'Ngrok token not set' });
+
+        try {
+            if (ngrokUrl) await ngrok.disconnect();
+            ngrokUrl = await ngrok.connect({
+                authtoken: token,
+                addr: PORT
+            });
+            res.json({ url: ngrokUrl });
+        } catch (e) {
+            res.status(500).json({ message: 'Ngrok error: ' + e.message });
+        }
+    });
+});
+
+app.post('/api/ngrok/stop', authenticateToken, async (req, res) => {
+    try {
+        await ngrok.disconnect();
+        ngrokUrl = null;
+        res.json({ message: 'Ngrok stopped' });
+    } catch (e) {
+        res.status(500).json({ message: 'Ngrok error' });
+    }
+});
+
+app.get('/api/ngrok/status', authenticateToken, (req, res) => {
+    res.json({ url: ngrokUrl });
+});
+
+// Database Management API
+app.get('/api/database/status', authenticateToken, (req, res) => {
+    // In Termux, we check if mysql/psql commands work or if services are up
+    exec('pgrep -x mariadbd || pgrep -x mysqld', (err1) => {
+        exec('pgrep -x postgres', (err2) => {
+            res.json({
+                mariadb: !err1,
+                postgresql: !err2
+            });
+        });
+    });
+});
+
+// Maintenance API
+app.post('/api/maintenance/backup', authenticateToken, (req, res) => {
+    exec('./backup.sh', (err, stdout, stderr) => {
+        if (err) return res.status(500).json({ message: 'Backup failed', error: stderr });
+        res.json({ message: 'Backup completed', details: stdout });
+    });
+});
+
+app.post('/api/maintenance/wipe', authenticateToken, (req, res) => {
+    // Dangerous: only allow admin or specific user if needed
+    // For now, let's just implement the logic to clear apps from DB and folder
+    db.run(`DELETE FROM apps WHERE user_id = ?`, [req.user.id], (err) => {
+        if (err) return res.status(500).json({ message: 'Wipe failed' });
+        // Optionally delete folders in apps/ (complex to match user_id to folder name safely here)
+        res.json({ message: 'Applications wiped from database' });
+    });
+});
+
+// Automated Backups
+cron.schedule('0 0 * * *', () => {
+    console.log('Running daily automated backup...');
+    exec('./backup.sh', (err) => {
+        if (err) console.error('Automated backup failed');
+        else console.log('Automated backup successful');
+    });
+});
+
+// File Manager API
+app.get('/api/apps/:name/files', authenticateToken, (req, res) => {
+    const { name } = req.params;
+    const subPath = req.query.path || '';
+
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found' });
+
+        const appDir = path.dirname(appRecord.path);
+        const targetPath = path.join(appDir, subPath);
+
+        // Safety check to prevent directory traversal
+        if (!targetPath.startsWith(appDir)) {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+
+        if (!fs.existsSync(targetPath)) return res.status(404).json({ message: 'File not found' });
+
+        const stats = fs.statSync(targetPath);
+        if (stats.isDirectory()) {
+            const files = fs.readdirSync(targetPath).map(f => {
+                const s = fs.statSync(path.join(targetPath, f));
+                return { name: f, isDirectory: s.isDirectory(), size: s.size };
+            });
+            res.json({ isDirectory: true, files });
+        } else {
+            const content = fs.readFileSync(targetPath, 'utf8');
+            res.json({ isDirectory: false, content });
+        }
+    });
+});
+
 // App Management API
 app.get('/api/apps', authenticateToken, (req, res) => {
-    db.all(`SELECT * FROM apps`, [], (err, rows) => {
+    db.all(`SELECT * FROM apps WHERE user_id = ?`, [req.user.id], (err, rows) => {
         if (err) return res.status(500).json({ message: err.message });
         res.json(rows);
     });
@@ -168,15 +317,16 @@ app.get('/api/apps', authenticateToken, (req, res) => {
 
 app.post('/api/apps/:name/start', authenticateToken, (req, res) => {
     const { name } = req.params;
-    db.get(`SELECT * FROM apps WHERE name = ?`, [name], (err, app) => {
-        if (err || !app) return res.status(404).json({ message: 'App not found' });
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
 
         pm2.connect((err) => {
             if (err) return res.status(500).json({ message: 'PM2 connect error' });
             pm2.start({
-                name: app.name,
-                script: app.path,
-                cwd: path.dirname(app.path),
+                name: appRecord.name,
+                script: appRecord.path,
+                cwd: path.dirname(appRecord.path),
+                max_memory_restart: appRecord.memory_limit ? `${appRecord.memory_limit}M` : undefined,
             }, (err) => {
                 if (err) return res.status(500).json({ message: 'PM2 start error' });
                 db.run(`UPDATE apps SET status = 'running' WHERE name = ?`, [name], () => {
@@ -189,11 +339,15 @@ app.post('/api/apps/:name/start', authenticateToken, (req, res) => {
 
 app.post('/api/apps/:name/stop', authenticateToken, (req, res) => {
     const { name } = req.params;
-    pm2.connect((err) => {
-        if (err) return res.status(500).json({ message: 'PM2 connect error' });
-        pm2.stop(name, (err) => {
-            db.run(`UPDATE apps SET status = 'stopped' WHERE name = ?`, [name], () => {
-                res.json({ message: 'App stopped' });
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
+
+        pm2.connect((err) => {
+            if (err) return res.status(500).json({ message: 'PM2 connect error' });
+            pm2.stop(name, (err) => {
+                db.run(`UPDATE apps SET status = 'stopped' WHERE name = ?`, [name], () => {
+                    res.json({ message: 'App stopped' });
+                });
             });
         });
     });
@@ -201,8 +355,8 @@ app.post('/api/apps/:name/stop', authenticateToken, (req, res) => {
 
 app.delete('/api/apps/:name', authenticateToken, (req, res) => {
     const { name } = req.params;
-    db.get(`SELECT * FROM apps WHERE name = ?`, [name], (err, appRecord) => {
-        if (err || !appRecord) return res.status(404).json({ message: 'App not found' });
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
 
         pm2.connect((err) => {
             if (err) return res.status(500).json({ message: 'PM2 connect error' });
@@ -257,7 +411,7 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
             const port = (row && row.maxPort) ? row.maxPort + 1 : 4000;
 
             // Install dependencies if needed
-            if (installCmd) {
+            if (installCmd && !process.env.SKIP_INSTALL) {
                 console.log(`Installing dependencies for ${appName}...`);
                 exec(installCmd, { cwd: targetDir }, (err) => {
                     if (err) console.error(`Dependency install failed for ${appName}:`, err);
@@ -275,7 +429,8 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                         name: appName,
                         script: entryPoint || targetDir, // static fallback
                         cwd: targetDir,
-                        env: { PORT: port }
+                        env: { PORT: port },
+                        max_memory_restart: req.body.memoryLimit ? `${req.body.memoryLimit}M` : undefined,
                     };
 
                     if (type === 'static') {
@@ -292,11 +447,15 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                     }
 
                     pm2.start(pm2Config, (err) => {
-                        if (err) return res.status(500).json({ message: 'PM2 start error' });
+                        if (err) {
+                            console.error('PM2 Start Error:', err);
+                            return res.status(500).json({ message: 'PM2 start error' });
+                        }
 
-                        db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route) VALUES (?, ?, ?, ?, ?, ?)`,
-                            [appName, type, port, 'running', pm2Config.script, `/${appName}`],
-                            () => {
+                        db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route, user_id, memory_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                            [appName, type, port, 'running', pm2Config.script, `/${appName}`, req.user.id, req.body.memoryLimit || null],
+                            (err) => {
+                                if (err) console.error('DB Insert Error:', err);
                                 res.json({
                                     message: 'App deployed and running',
                                     name: appName,
@@ -317,18 +476,23 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
 
 app.get('/api/apps/:name/logs', authenticateToken, (req, res) => {
     const { name } = req.params;
-    // PM2 doesn't easily provide logs via API in a string format,
+
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
+
+        // PM2 doesn't easily provide logs via API in a string format,
     // usually we'd read the log files.
     const logPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-out.log`);
     const errorLogPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-error.log`);
 
-    try {
-        const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-5000) : '';
-        const err = fs.existsSync(errorLogPath) ? fs.readFileSync(errorLogPath, 'utf8').slice(-5000) : '';
-        res.json({ out, err });
-    } catch (e) {
-        res.status(500).json({ message: 'Error reading logs' });
-    }
+        try {
+            const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-5000) : '';
+            const err = fs.existsSync(errorLogPath) ? fs.readFileSync(errorLogPath, 'utf8').slice(-5000) : '';
+            res.json({ out, err });
+        } catch (e) {
+            res.status(500).json({ message: 'Error reading logs' });
+        }
+    });
 });
 
 // WebSocket Monitoring
