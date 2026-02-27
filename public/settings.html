@@ -15,6 +15,7 @@
             <a class="navbar-brand" href="dashboard.html">HostCore Mobile</a>
             <div class="navbar-nav">
                 <a class="nav-link" href="dashboard.html">Dashboard</a>
+                <a class="nav-link" href="system.html">System Info</a>
                 <a class="nav-link active" href="settings.html">Settings</a>
             </div>
         </div>
@@ -53,6 +54,18 @@
         </div>
 
         <div class="card p-4 mb-4">
+            <h4>Profile</h4>
+            <hr>
+            <form id="profileForm">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" id="profileUsername" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-outline-primary">Update Profile</button>
+            </form>
+        </div>
+
+        <div class="card p-4 mb-4">
             <h4>Security</h4>
             <hr>
             <form id="passwordForm">
@@ -71,9 +84,19 @@
         <div class="card p-4">
             <h4>Maintenance</h4>
             <hr>
-            <div class="d-grid gap-2">
-                <button class="btn btn-outline-secondary" onclick="triggerBackup()">Trigger Manual Backup</button>
-                <button class="btn btn-outline-danger" onclick="wipeApps()">Wipe All Applications</button>
+            <div class="row g-2">
+                <div class="col-6">
+                    <button class="btn btn-outline-secondary w-100" onclick="triggerBackup()">Manual Backup</button>
+                </div>
+                <div class="col-6">
+                    <button class="btn btn-outline-info w-100" onclick="maintenanceAction('restart-all')">Restart All</button>
+                </div>
+                <div class="col-6">
+                    <button class="btn btn-outline-warning w-100" onclick="maintenanceAction('clear-all-logs')">Flush Logs</button>
+                </div>
+                <div class="col-6">
+                    <button class="btn btn-outline-danger w-100" onclick="wipeApps()">Wipe All</button>
+                </div>
             </div>
         </div>
     </div>
@@ -90,6 +113,12 @@
             if (settings.ngrok_token) {
                 document.getElementById('ngrokToken').value = settings.ngrok_token;
             }
+
+            const profileRes = await fetch('/api/auth/me', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const profile = await profileRes.json();
+            document.getElementById('profileUsername').value = profile.username;
         }
 
         async function saveSettings() {
@@ -168,8 +197,18 @@
             else showAlert('Backup failed: ' + data.message, 'danger');
         }
 
+        async function maintenanceAction(action) {
+            const res = await fetch(`/api/maintenance/${action}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) showAlert(data.message, 'success');
+            else showAlert(data.message, 'danger');
+        }
+
         async function wipeApps() {
-            if (confirm('Are you absolutely sure? This will remove all your apps from the database.')) {
+            if (confirm('Are you absolutely sure? This will PERMANENTLY delete all your apps and files.')) {
                 const res = await fetch('/api/maintenance/wipe', {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${token}` }
@@ -199,6 +238,22 @@
             } else {
                 showAlert(data.message, 'danger');
             }
+        };
+
+        document.getElementById('profileForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('profileUsername').value;
+            const res = await fetch('/api/auth/update-profile', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username })
+            });
+            const data = await res.json();
+            if (res.ok) showAlert('Profile updated successfully', 'success');
+            else showAlert(data.message, 'danger');
         };
 
         loadSettings();

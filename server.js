@@ -81,7 +81,9 @@ app.use((req, res, next) => {
             if (row) {
                 const target = `http://localhost:${row.port}`;
                 // Strip the app name from the path for the target
-                req.url = req.url.replace(`/${appName}`, '') || '/';
+                if (req.url.startsWith(`/${appName}`)) {
+                    req.url = req.url.substring(appName.length + 1) || '/';
+                }
 
                 proxy.web(req, res, { target }, (e) => {
                     console.error(`Proxy error for ${appName}:`, e.message);
@@ -151,7 +153,10 @@ function initDb() {
 // Authentication Middleware
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+    let token = authHeader && authHeader.split(' ')[1];
+
+    // Support token in query for downloads
+    if (!token && req.query.token) token = req.query.token;
 
     if (!token) return res.status(401).json({ message: 'Access denied' });
 
@@ -220,6 +225,19 @@ app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
             }
             res.json({ message: 'Password updated' });
         });
+    });
+});
+
+app.post('/api/auth/update-profile', authenticateToken, async (req, res) => {
+    const { username } = req.body;
+    if (!username) return res.status(400).json({ message: 'Username required' });
+
+    db.run(`UPDATE users SET username = ? WHERE id = ?`, [username, req.user.id], (err) => {
+        if (err) {
+            if (err.message.includes('UNIQUE constraint failed')) return res.status(400).json({ message: 'Username already taken' });
+            return res.status(500).json({ message: 'Update failed' });
+        }
+        res.json({ message: 'Profile updated' });
     });
 });
 
@@ -299,6 +317,27 @@ app.get('/api/database/query/:table', authenticateToken, (req, res) => {
     });
 });
 
+app.get('/api/system/details', authenticateToken, async (req, res) => {
+    try {
+        const cpu = await si.cpu();
+        const mem = await si.mem();
+        const osInfo = await si.osInfo();
+        const disk = await si.fsSize();
+        const nodeVersion = process.version;
+
+        res.json({
+            cpu,
+            mem,
+            os: osInfo,
+            disk: disk[0],
+            node: nodeVersion,
+            platform: process.platform
+        });
+    } catch (e) {
+        res.status(500).json({ message: 'Error fetching system info' });
+    }
+});
+
 app.get('/api/database/status', authenticateToken, (req, res) => {
     // In Termux, we check if mysql/psql commands work or if services are up
     exec('pgrep -x mariadbd || pgrep -x mysqld', (err1) => {
@@ -319,13 +358,41 @@ app.post('/api/maintenance/backup', authenticateToken, (req, res) => {
     });
 });
 
+app.post('/api/maintenance/restart-all', authenticateToken, (req, res) => {
+    pm2.connect((err) => {
+        if (err) return res.status(500).json({ message: 'PM2 connect error' });
+        pm2.restart('all', (err) => {
+            res.json({ message: 'All applications restarted' });
+        });
+    });
+});
+
+app.post('/api/maintenance/clear-all-logs', authenticateToken, (req, res) => {
+    pm2.connect((err) => {
+        if (err) return res.status(500).json({ message: 'PM2 connect error' });
+        pm2.flush('all', (err) => {
+            res.json({ message: 'All logs cleared' });
+        });
+    });
+});
+
 app.post('/api/maintenance/wipe', authenticateToken, (req, res) => {
-    // Dangerous: only allow admin or specific user if needed
-    // For now, let's just implement the logic to clear apps from DB and folder
-    db.run(`DELETE FROM apps WHERE user_id = ?`, [req.user.id], (err) => {
-        if (err) return res.status(500).json({ message: 'Wipe failed' });
-        // Optionally delete folders in apps/ (complex to match user_id to folder name safely here)
-        res.json({ message: 'Applications wiped from database' });
+    db.all(`SELECT name FROM apps WHERE user_id = ?`, [req.user.id], (err, rows) => {
+        if (err) return res.status(500).json({ message: 'Query failed' });
+
+        const names = rows.map(r => r.name);
+        pm2.connect((err) => {
+            names.forEach(name => pm2.delete(name, () => {}));
+
+            db.run(`DELETE FROM apps WHERE user_id = ?`, [req.user.id], (err) => {
+                if (err) return res.status(500).json({ message: 'Wipe failed' });
+                names.forEach(name => {
+                    const appDir = path.join(__dirname, 'apps', name);
+                    if (fs.existsSync(appDir)) fs.rmSync(appDir, { recursive: true, force: true });
+                });
+                res.json({ message: 'All your applications and files have been wiped' });
+            });
+        });
     });
 });
 
@@ -446,6 +513,47 @@ app.post('/api/apps/:name/stop', authenticateToken, (req, res) => {
     });
 });
 
+app.put('/api/apps/:name', authenticateToken, (req, res) => {
+    const { name } = req.params;
+    const { memoryLimit, envVars } = req.body;
+
+    db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
+        if (err || !appRecord) return res.status(404).json({ message: 'App not found' });
+
+        db.run(`UPDATE apps SET memory_limit = ?, env_vars = ? WHERE name = ?`,
+            [memoryLimit || appRecord.memory_limit, envVars || appRecord.env_vars, name], (err) => {
+            if (err) return res.status(500).json({ message: 'Update failed' });
+
+            // Restart app with new settings if it's running
+            if (appRecord.status === 'running') {
+                pm2.connect((err) => {
+                    if (err) return res.json({ message: 'Saved, but PM2 restart failed' });
+
+                    let env = {};
+                    try {
+                        if (envVars) env = JSON.parse(envVars);
+                        else if (appRecord.env_vars) env = JSON.parse(appRecord.env_vars);
+                    } catch (e) {}
+
+                    pm2.stop(name, () => {
+                        pm2.start({
+                            name: appRecord.name,
+                            script: appRecord.path,
+                            cwd: path.dirname(appRecord.path),
+                            max_memory_restart: (memoryLimit || appRecord.memory_limit) ? `${memoryLimit || appRecord.memory_limit}M` : undefined,
+                            env: { ...env, PORT: appRecord.port }
+                        }, () => {
+                            res.json({ message: 'Settings updated and app restarted' });
+                        });
+                    });
+                });
+            } else {
+                res.json({ message: 'Settings updated' });
+            }
+        });
+    });
+});
+
 app.delete('/api/apps/:name', authenticateToken, (req, res) => {
     const { name } = req.params;
     db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
@@ -554,6 +662,10 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                         max_memory_restart: req.body.memoryLimit ? `${req.body.memoryLimit}M` : undefined,
                     };
 
+                    if (type === 'python') {
+                        pm2Config.interpreter = 'python';
+                    }
+
                     if (type === 'static') {
                         fs.writeFileSync(path.join(targetDir, 'hc-static-server.js'), `
                             const express = require('express');
@@ -579,6 +691,8 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
                             [appName, type, port, 'running', pm2Config.script, `/${appName}`, req.user.id, req.body.memoryLimit || null, req.body.envVars || null],
                             (err) => {
                                 if (err) console.error('DB Insert Error:', err);
+                                // Clean up uploaded ZIP
+                                if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
                                 res.json({
                                     message: 'App deployed and running',
                                     name: appName,
@@ -600,12 +714,22 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
 app.get('/api/apps/:name/logs', authenticateToken, (req, res) => {
     const { name } = req.params;
     const limit = req.query.limit ? parseInt(req.query.limit) : 5000;
+    const download = req.query.download === 'true';
 
     db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
         if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
 
         const logPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-out.log`);
         const errorLogPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-error.log`);
+
+        if (download) {
+            if (fs.existsSync(logPath)) {
+                res.download(logPath);
+            } else {
+                res.status(404).send('Log file not found');
+            }
+            return;
+        }
 
         try {
             const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-limit) : '';
@@ -671,6 +795,21 @@ io.on('connection', (socket) => {
         clearInterval(interval);
         console.log('Client disconnected from monitoring');
     });
+});
+
+// WebSocket Upgrade Proxy support
+server.on('upgrade', (req, socket, head) => {
+    const parts = req.url.split('/');
+    if (parts.length > 1 && parts[1] !== 'socket.io') {
+        const appName = parts[1];
+        db.get(`SELECT port FROM apps WHERE name = ? AND status = 'running'`, [appName], (err, row) => {
+            if (row) {
+                const target = `ws://localhost:${row.port}`;
+                req.url = req.url.substring(appName.length + 1) || '/';
+                proxy.ws(req, socket, head, { target });
+            }
+        });
+    }
 });
 
 server.listen(PORT, () => {

@@ -40,4 +40,10 @@ Allow others to use the HostCore UI under their own brand.
 4. **Scale:** Marketing as the "Lowest Cost Hosting for Developers."
 
 ---
+## 🧪 6. Enterprise Features (Coming Soon)
+- **Auto-Scaling:** Automatically scale internal PM2 instances based on load.
+- **Service Mesh:** Internal communication between apps via private virtual network.
+- **One-Click SSL:** Automated Let's Encrypt certificates for Ngrok custom domains.
+
+---
 The portable cloud is just beginning. 🚀

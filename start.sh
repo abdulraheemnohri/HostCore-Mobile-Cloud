@@ -13,6 +13,9 @@ fi
 # Create required directories
 mkdir -p apps uploads backups logs
 
+# Check dependencies
+node check-deps.js
+
 # Start the main server with PM2
 $PM2_BIN start ecosystem.config.js
 
