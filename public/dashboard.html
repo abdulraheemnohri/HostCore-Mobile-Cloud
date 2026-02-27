@@ -26,6 +26,7 @@
                     <li class="nav-item"><a class="nav-link" href="deploy.html">Deploy</a></li>
                     <li class="nav-item"><a class="nav-link" href="apps.html">Apps</a></li>
                     <li class="nav-item"><a class="nav-link" href="db.html">Database</a></li>
+                    <li class="nav-item"><a class="nav-link" href="system.html">System Info</a></li>
                     <li class="nav-item"><a class="nav-link" href="settings.html">Settings</a></li>
                 </ul>
                 <button class="btn btn-outline-light btn-sm" onclick="logout()">Logout</button>
@@ -55,8 +56,14 @@
             </div>
             <div class="col-6 col-md-3">
                 <div class="card p-3 text-center">
+                    <div class="text-muted small">Disk Usage</div>
+                    <div id="disk-stat" class="stat-value text-danger">0%</div>
+                </div>
+            </div>
+            <div class="col-12 col-md-3">
+                <div class="card p-3 text-center">
                     <div class="text-muted small">System Uptime</div>
-                    <div id="uptime-stat" class="stat-value text-warning">--</div>
+                    <div id="uptime-stat" class="stat-value text-warning" style="font-size: 1.1rem;">--</div>
                 </div>
             </div>
         </div>
@@ -84,7 +91,8 @@
                 labels: [],
                 datasets: [
                     { label: 'CPU %', data: [], borderColor: '#0d6efd', tension: 0.4, fill: false },
-                    { label: 'RAM %', data: [], borderColor: '#198754', tension: 0.4, fill: false }
+                    { label: 'RAM %', data: [], borderColor: '#198754', tension: 0.4, fill: false },
+                    { label: 'Disk %', data: [], borderColor: '#dc3545', tension: 0.4, fill: false }
                 ]
             },
             options: {
@@ -106,6 +114,7 @@
         socket.on('stats', (data) => {
             document.getElementById('cpu-stat').innerText = data.cpu.toFixed(1) + '%';
             document.getElementById('mem-stat').innerText = data.mem.toFixed(1) + '%';
+            document.getElementById('disk-stat').innerText = data.disk.toFixed(1) + '%';
             document.getElementById('apps-stat').innerText = data.apps.length;
             document.getElementById('uptime-stat').innerText = formatUptime(data.uptime);
 
@@ -113,11 +122,13 @@
             loadChart.data.labels.push(now);
             loadChart.data.datasets[0].data.push(data.cpu);
             loadChart.data.datasets[1].data.push(data.mem);
+            loadChart.data.datasets[2].data.push(data.disk);
 
             if (loadChart.data.labels.length > 20) {
                 loadChart.data.labels.shift();
                 loadChart.data.datasets[0].data.shift();
                 loadChart.data.datasets[1].data.shift();
+                loadChart.data.datasets[2].data.shift();
             }
             loadChart.update('none');
         });

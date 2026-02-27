@@ -17,6 +17,7 @@
                 <a class="nav-link" href="dashboard.html">Dashboard</a>
                 <a class="nav-link active" href="deploy.html">Deploy</a>
                 <a class="nav-link" href="apps.html">Apps</a>
+                <a class="nav-link" href="system.html">System</a>
             </div>
         </div>
     </nav>
@@ -38,9 +39,13 @@
                     <label class="form-label">Select ZIP File</label>
                     <input type="file" id="appZip" class="form-control" accept=".zip" required>
                 </div>
-                <div class="mb-4">
+                <div class="mb-3">
                     <label class="form-label">Memory Limit (MB) - Optional</label>
                     <input type="number" id="memoryLimit" class="form-control" placeholder="e.g. 128">
+                </div>
+                <div class="mb-4">
+                    <label class="form-label">Env Vars (JSON) - Optional</label>
+                    <textarea id="envVars" class="form-control" placeholder='{"KEY": "VALUE"}' rows="3"></textarea>
                 </div>
 
                 <div id="loading" class="d-none mb-3">
@@ -67,6 +72,7 @@
             formData.append('name', document.getElementById('appName').value);
             formData.append('appZip', document.getElementById('appZip').files[0]);
             formData.append('memoryLimit', document.getElementById('memoryLimit').value);
+            formData.append('envVars', document.getElementById('envVars').value);
 
             alert.classList.add('d-none');
             loading.classList.remove('d-none');
