@@ -32,27 +32,63 @@
                     <div class="border rounded p-3 bg-white">
                         <h5>SQLite (System)</h5>
                         <p class="small">Path: <code>/app/database.db</code></p>
-                        <button class="btn btn-outline-primary btn-sm" disabled>Manage Tables</button>
+                        <span class="badge bg-success">Running</span>
+                        <div class="mt-2">
+                            <button class="btn btn-outline-primary btn-sm" disabled>Manage Tables</button>
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="border rounded p-3 bg-white">
                         <h5>MariaDB / MySQL</h5>
-                        <p class="small text-danger">Service: Not Detected</p>
-                        <p class="x-small">Install via Termux: <code>pkg install mariadb</code></p>
-                        <button class="btn btn-primary btn-sm" onclick="alert('In real Termux, this would run: pkg install mariadb')">Install Now</button>
+                        <div id="mariaStatus">Checking...</div>
+                        <p class="x-small mt-2">Install via Termux: <code>pkg install mariadb</code></p>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-primary btn-sm" onclick="alert('Run: pkg install mariadb')">Install</button>
+                            <button class="btn btn-success btn-sm" onclick="alert('Run: mysqld_safe &')">Start</button>
+                        </div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="border rounded p-3 bg-white">
                         <h5>PostgreSQL</h5>
-                        <p class="small text-danger">Service: Not Detected</p>
-                        <p class="x-small">Install via Termux: <code>pkg install postgresql</code></p>
-                        <button class="btn btn-primary btn-sm" onclick="alert('In real Termux, this would run: pkg install postgresql')">Install Now</button>
+                        <div id="pgStatus">Checking...</div>
+                        <p class="x-small mt-2">Install via Termux: <code>pkg install postgresql</code></p>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-primary btn-sm" onclick="alert('Run: pkg install postgresql')">Install</button>
+                            <button class="btn btn-success btn-sm" onclick="alert('Run: pg_ctl -D $PREFIX/var/lib/postgresql start')">Start</button>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <script>
+        const token = localStorage.getItem('token');
+        if (!token) window.location.href = '/login.html';
+
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/database/status', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+
+                document.getElementById('mariaStatus').innerHTML = data.mariadb
+                    ? '<span class="badge bg-success">Running</span>'
+                    : '<span class="badge bg-danger">Stopped / Not Installed</span>';
+
+                document.getElementById('pgStatus').innerHTML = data.postgresql
+                    ? '<span class="badge bg-success">Running</span>'
+                    : '<span class="badge bg-danger">Stopped / Not Installed</span>';
+            } catch (e) {
+                console.error('Status check failed');
+            }
+        }
+
+        checkStatus();
+        setInterval(checkStatus, 5000);
+    </script>
 </body>
 </html>

@@ -21,6 +21,8 @@
     </nav>
 
     <div class="container">
+        <div id="alert" class="alert d-none"></div>
+
         <div class="card p-4 mb-4">
             <h4>System Settings</h4>
             <hr>
@@ -30,19 +32,139 @@
             </div>
             <div class="mb-3">
                 <label class="form-label">Ngrok Auth Token</label>
-                <input type="password" class="form-control" placeholder="Paste your token here">
+                <input type="password" id="ngrokToken" class="form-control" placeholder="Paste your token here">
             </div>
-            <button class="btn btn-primary">Save Changes</button>
+            <button class="btn btn-primary" onclick="saveSettings()">Save Changes</button>
+        </div>
+
+        <div class="card p-4 mb-4">
+            <h4>Ngrok Tunnel</h4>
+            <hr>
+            <div id="ngrokStatus" class="mb-3">
+                Status: <span class="badge bg-secondary">Disconnected</span>
+            </div>
+            <div class="d-flex gap-2">
+                <button id="startNgrok" class="btn btn-success flex-fill" onclick="toggleNgrok(true)">Start Tunnel</button>
+                <button id="stopNgrok" class="btn btn-danger flex-fill d-none" onclick="toggleNgrok(false)">Stop Tunnel</button>
+            </div>
+            <div id="ngrokUrl" class="mt-3 d-none">
+                Public URL: <a href="#" target="_blank" class="text-break"></a>
+            </div>
         </div>
 
         <div class="card p-4">
             <h4>Maintenance</h4>
             <hr>
             <div class="d-grid gap-2">
-                <button class="btn btn-outline-secondary" onclick="alert('Backup started...')">Trigger Manual Backup</button>
-                <button class="btn btn-outline-danger" onclick="confirm('Wipe all apps?')">Wipe All Applications</button>
+                <button class="btn btn-outline-secondary" onclick="triggerBackup()">Trigger Manual Backup</button>
+                <button class="btn btn-outline-danger" onclick="wipeApps()">Wipe All Applications</button>
             </div>
         </div>
     </div>
+
+    <script>
+        const token = localStorage.getItem('token');
+        if (!token) window.location.href = '/login.html';
+
+        async function loadSettings() {
+            const res = await fetch('/api/settings', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const settings = await res.json();
+            if (settings.ngrok_token) {
+                document.getElementById('ngrokToken').value = settings.ngrok_token;
+            }
+        }
+
+        async function saveSettings() {
+            const ngrok_token = document.getElementById('ngrokToken').value;
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ settings: { ngrok_token } })
+            });
+            if (res.ok) showAlert('Settings saved successfully', 'success');
+        }
+
+        async function checkNgrok() {
+            const res = await fetch('/api/ngrok/status', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            updateNgrokUI(data.url);
+        }
+
+        async function toggleNgrok(start) {
+            const endpoint = start ? '/api/ngrok/start' : '/api/ngrok/stop';
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                updateNgrokUI(data.url || null);
+                if (start) showAlert('Ngrok tunnel started', 'success');
+                else showAlert('Ngrok tunnel stopped', 'info');
+            } else {
+                showAlert(data.message, 'danger');
+            }
+        }
+
+        function updateNgrokUI(url) {
+            const status = document.getElementById('ngrokStatus');
+            const startBtn = document.getElementById('startNgrok');
+            const stopBtn = document.getElementById('stopNgrok');
+            const urlDiv = document.getElementById('ngrokUrl');
+
+            if (url) {
+                status.innerHTML = 'Status: <span class="badge bg-success">Connected</span>';
+                startBtn.classList.add('d-none');
+                stopBtn.classList.remove('d-none');
+                urlDiv.classList.remove('d-none');
+                urlDiv.querySelector('a').href = url;
+                urlDiv.querySelector('a').innerText = url;
+            } else {
+                status.innerHTML = 'Status: <span class="badge bg-secondary">Disconnected</span>';
+                startBtn.classList.remove('d-none');
+                stopBtn.classList.add('d-none');
+                urlDiv.classList.add('d-none');
+            }
+        }
+
+        function showAlert(msg, type) {
+            const alert = document.getElementById('alert');
+            alert.className = `alert alert-${type}`;
+            alert.innerText = msg;
+            alert.classList.remove('d-none');
+            setTimeout(() => alert.classList.add('d-none'), 3000);
+        }
+
+        async function triggerBackup() {
+            const res = await fetch('/api/maintenance/backup', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) showAlert('Backup completed successfully', 'success');
+            else showAlert('Backup failed: ' + data.message, 'danger');
+        }
+
+        async function wipeApps() {
+            if (confirm('Are you absolutely sure? This will remove all your apps from the database.')) {
+                const res = await fetch('/api/maintenance/wipe', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok) showAlert('Applications wiped', 'warning');
+                else showAlert('Wipe failed', 'danger');
+            }
+        }
+
+        loadSettings();
+        checkNgrok();
+    </script>
 </body>
 </html>

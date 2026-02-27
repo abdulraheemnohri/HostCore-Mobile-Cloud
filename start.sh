@@ -4,12 +4,17 @@ echo "Starting HostCore Mobile Cloud..."
 # Ensure pm2 is available
 if ! command -v pm2 &> /dev/null
 then
-    echo "PM2 could not be found. Installing..."
-    npm install -g pm2
+    echo "PM2 could not be found. Using local version..."
+    PM2_BIN="./node_modules/.bin/pm2"
+else
+    PM2_BIN="pm2"
 fi
 
+# Create required directories
+mkdir -p apps uploads backups logs
+
 # Start the main server with PM2
-pm2 start ecosystem.config.js
+$PM2_BIN start ecosystem.config.js
 
 echo "HostCore started. Visit http://localhost:3000"
-pm2 logs hostcore
+$PM2_BIN logs hostcore
