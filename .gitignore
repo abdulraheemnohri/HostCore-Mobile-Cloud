@@ -1,0 +1,7 @@
+node_modules/
+uploads/
+backups/
+logs/
+apps/
+database.db
+.env
