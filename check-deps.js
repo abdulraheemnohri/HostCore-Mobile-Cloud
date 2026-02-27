@@ -27,3 +27,13 @@ if (missing.length > 0) {
 } else {
     console.log('All dependencies are present.');
 }
+
+// Native module verification
+try {
+    const sqlite3 = require('sqlite3');
+    console.log('Native module sqlite3 verified.');
+} catch (e) {
+    console.error('CRITICAL: Native module sqlite3 failed to load:', e.message);
+    console.log('Please run ./fix-termux.sh to fix library issues.');
+    process.exit(1);
+}

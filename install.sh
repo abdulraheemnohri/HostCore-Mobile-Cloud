@@ -11,7 +11,7 @@ pkg update -y && pkg upgrade -y
 
 # 2. Install essential dependencies
 echo "[2/5] Installing core dependencies (Node.js, Git, Python, MariaDB, build-essential)..."
-pkg install -y nodejs git python mariadb postgresql tar curl build-essential binutils
+pkg install -y nodejs git python mariadb postgresql tar curl build-essential binutils libc++
 
 # 3. Clone Repository
 echo "[3/5] Cloning HostCore repository..."
@@ -24,8 +24,9 @@ else
 fi
 
 # 4. Install NPM packages
-echo "[4/5] Installing Node.js packages..."
-npm install
+echo "[4/5] Installing Node.js packages (Building from source)..."
+# Force build native modules in Termux environment
+npm install --build-from-source
 
 # 5. Finalize
 echo "[5/5] Setup complete!"
