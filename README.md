@@ -1,5 +1,8 @@
 # HostCore Mobile Cloud 📱☁️
 
+[![CI](https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud/actions/workflows/ci.yml)
+[![Release](https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud/actions/workflows/release.yml/badge.svg)](https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud/releases)
+
 HostCore Mobile Cloud is a fully self-hosted, reverse-proxy-based app hosting platform designed specifically to run entirely inside **Termux** on Android. It provides a portable PaaS (Platform as a Service) environment similar to Heroku or Vercel, right in your pocket.
 
 ## 🚀 Features
@@ -78,6 +81,14 @@ hostcore-mobile/
 - **No Docker:** Runs directly on the Android kernel via Termux.
 - **Traffic:** Not suitable for high-traffic production use (dependent on phone hardware).
 - **Backgrounding:** Android may kill Termux if battery optimization is not disabled for the app.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 🛡️ Security
+
+If you discover a security vulnerability, please follow the [SECURITY.md](SECURITY.md) policy.
 
 ## 🔗 Repository
 [https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud](https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud)

@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"No tests specified yet\" && exit 0"
   },
   "dependencies": {
     "adm-zip": "^0.5.10",

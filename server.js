@@ -48,10 +48,13 @@ app.use(express.json());
 
 // Reverse Proxy Middleware
 app.use((req, res, next) => {
+    // Reserved system routes
+    const reserved = ['api', 'login.html', 'dashboard.html', 'deploy.html', 'apps.html', 'db.html', 'settings.html', 'socket.io'];
+
     // Check if path starts with an app route
     // Expected path: /appname/path
     const parts = req.path.split('/');
-    if (parts.length > 1 && parts[1] !== 'api' && parts[1] !== '') {
+    if (parts.length > 1 && !reserved.includes(parts[1]) && parts[1] !== '') {
         const appName = parts[1];
         db.get(`SELECT * FROM apps WHERE name = ? AND status = 'running'`, [appName], (err, row) => {
             if (err) return res.status(500).send('Proxy error');
