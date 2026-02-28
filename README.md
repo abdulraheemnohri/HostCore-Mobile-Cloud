@@ -7,11 +7,11 @@ HostCore Mobile Cloud is a fully self-hosted, reverse-proxy-based app hosting pl
 
 ## 🚀 Features
 
-- **Multi-App Hosting:** Run multiple Node.js, Python, and Static HTML apps simultaneously.
+- **Multi-App Hosting:** Run multiple Node.js, PHP, and Static HTML apps simultaneously.
 - **Dynamic Reverse Proxy:** Automatic routing from `/appname` to internal ports.
 - **Mobile-Optimized UI:** A beautiful, responsive dashboard for managing everything from your phone.
 - **Real-Time Monitoring:** Live WebSocket-based CPU, RAM, and App status tracking with Chart.js.
-- **Deployment Engine:** Simply upload a ZIP file; HostCore handles extraction, dependency installation (npm/pip), and process management.
+- **Deployment Engine:** Simply upload a ZIP file; HostCore handles extraction, dependency installation (npm), and process management.
 - **Multi-User Isolation:** Secure JWT-based authentication with isolated app management per user.
 - **Database Management:** Built-in support for SQLite, with status tracking for MariaDB and PostgreSQL.
 - **Integrated File Manager:** Browse and view application files directly from the web interface.
@@ -36,7 +36,7 @@ Follow these steps to get HostCore running on your Android device:
 
 2. **Install Dependencies:**
    ```bash
-   pkg install nodejs git python mariadb postgresql
+   pkg install nodejs git mariadb postgresql tar curl build-essential binutils libc++
    ```
 
 3. **Clone the Repository:**

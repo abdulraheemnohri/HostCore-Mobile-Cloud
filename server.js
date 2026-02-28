@@ -68,11 +68,10 @@ app.use((req, res, next) => {
     // Reserved system routes
     const reserved = [
         'api', 'login.html', 'dashboard.html', 'deploy.html', 'apps.html', 'db.html', 'settings.html',
-        'socket.io', 'assets', 'static', 'favicon.ico', 'manifest.json'
+        'system.html', 'socket.io', 'assets', 'static', 'favicon.ico', 'manifest.json'
     ];
 
     // Check if path starts with an app route
-    // Expected path: /appname/path
     const parts = req.path.split('/');
     if (parts.length > 1 && !reserved.includes(parts[1]) && parts[1] !== '') {
         const appName = parts[1];
@@ -80,7 +79,7 @@ app.use((req, res, next) => {
             if (err) return res.status(500).send('Proxy error');
             if (row) {
                 const target = `http://localhost:${row.port}`;
-                // Strip the app name from the path for the target
+                // Strip the app name from the path for the target robustly
                 if (req.url.startsWith(`/${appName}`)) {
                     req.url = req.url.substring(appName.length + 1) || '/';
                 }
@@ -339,7 +338,6 @@ app.get('/api/system/details', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/database/status', authenticateToken, (req, res) => {
-    // In Termux, we check if mysql/psql commands work or if services are up
     exec('pgrep -x mariadbd || pgrep -x mysqld', (err1) => {
         exec('pgrep -x postgres', (err2) => {
             res.json({
@@ -412,16 +410,16 @@ app.get('/api/apps/:name/health', authenticateToken, (req, res) => {
         if (err || !row) return res.status(404).json({ message: 'App not found' });
 
         const client = http.get(`http://localhost:${row.port}`, { timeout: 2000 }, (response) => {
-            res.json({ status: 'healthy', statusCode: response.statusCode });
+            if (!res.headersSent) res.json({ status: 'healthy', statusCode: response.statusCode });
         });
 
         client.on('error', (e) => {
-            res.json({ status: 'unhealthy', error: e.message });
+            if (!res.headersSent) res.json({ status: 'unhealthy', error: e.message });
         });
 
         client.on('timeout', () => {
             client.destroy();
-            res.json({ status: 'timeout' });
+            if (!res.headersSent) res.json({ status: 'timeout' });
         });
     });
 });
@@ -437,7 +435,6 @@ app.get('/api/apps/:name/files', authenticateToken, (req, res) => {
         const appDir = path.dirname(appRecord.path);
         const targetPath = path.join(appDir, subPath);
 
-        // Safety check to prevent directory traversal
         const absoluteAppDir = path.resolve(appDir);
         const absoluteTargetPath = path.resolve(targetPath);
         if (!absoluteTargetPath.startsWith(absoluteAppDir)) {
@@ -524,7 +521,6 @@ app.put('/api/apps/:name', authenticateToken, (req, res) => {
             [memoryLimit || appRecord.memory_limit, envVars || appRecord.env_vars, name], (err) => {
             if (err) return res.status(500).json({ message: 'Update failed' });
 
-            // Restart app with new settings if it's running
             if (appRecord.status === 'running') {
                 pm2.connect((err) => {
                     if (err) return res.json({ message: 'Saved, but PM2 restart failed' });
@@ -563,10 +559,7 @@ app.delete('/api/apps/:name', authenticateToken, (req, res) => {
             if (err) return res.status(500).json({ message: 'PM2 connect error' });
             pm2.delete(name, (err) => {
                 const appDir = path.join(__dirname, 'apps', appRecord.name);
-
-                // Remove from DB
                 db.run(`DELETE FROM apps WHERE name = ?`, [name], () => {
-                    // Delete files
                     if (fs.existsSync(appDir)) {
                         fs.rmSync(appDir, { recursive: true, force: true });
                     }
@@ -578,7 +571,6 @@ app.delete('/api/apps/:name', authenticateToken, (req, res) => {
 });
 
 app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, res) => {
-    // Quota Check
     const count = await new Promise(resolve => {
         db.get(`SELECT COUNT(*) as count FROM apps WHERE user_id = ?`, [req.user.id], (err, row) => {
             resolve(row ? row.count : 0);
@@ -593,7 +585,6 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
 
     const zipPath = req.file.path;
-    // Sanitize app name to prevent path traversal
     const rawName = req.body.name || path.parse(req.file.originalname).name;
     const appName = rawName.replace(/[^a-z0-9-_]/gi, '_');
     const targetDir = path.join(__dirname, 'apps', appName);
@@ -606,35 +597,26 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
         const zip = new AdmZip(zipPath);
         zip.extractAllTo(targetDir, true);
 
-        // App Type Detection
         let type = 'static';
         let entryPoint = '';
         let installCmd = '';
 
         if (fs.existsSync(path.join(targetDir, 'package.json'))) {
             type = 'node';
-            entryPoint = path.join(targetDir, 'index.js'); // Default
+            entryPoint = path.join(targetDir, 'index.js');
             installCmd = 'npm install';
-            // Try to find main in package.json
             const pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8'));
             if (pkg.main) entryPoint = path.join(targetDir, pkg.main);
-        } else if (fs.existsSync(path.join(targetDir, 'requirements.txt')) || fs.existsSync(path.join(targetDir, 'app.py'))) {
-            type = 'python';
-            entryPoint = path.join(targetDir, 'app.py');
-            installCmd = fs.existsSync(path.join(targetDir, 'requirements.txt')) ? 'pip install -r requirements.txt' : '';
         } else if (fs.existsSync(path.join(targetDir, 'index.php')) || fs.existsSync(path.join(targetDir, 'wp-config.php'))) {
             type = 'php';
             entryPoint = path.join(targetDir, 'index.php');
-            // Check if php is available
             const hasPhp = await new Promise(resolve => exec('php -v', err => resolve(!err)));
             if (!hasPhp) throw new Error('PHP is not installed in Termux');
         }
 
-        // Port Assignment
         db.get(`SELECT MAX(port) as maxPort FROM apps`, [], (err, row) => {
             const port = (row && row.maxPort) ? row.maxPort + 1 : 4000;
 
-            // Install dependencies if needed
             if (installCmd && !process.env.SKIP_INSTALL) {
                 console.log(`Installing dependencies for ${appName}...`);
                 exec(installCmd, { cwd: targetDir }, (err) => {
@@ -656,49 +638,39 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
 
                     const pm2Config = {
                         name: appName,
-                        script: entryPoint || targetDir, // static fallback
+                        script: entryPoint || targetDir,
                         cwd: targetDir,
                         env: { ...customEnv, PORT: port },
                         max_memory_restart: req.body.memoryLimit ? `${req.body.memoryLimit}M` : undefined,
                     };
 
-                    if (type === 'python') {
-                        pm2Config.interpreter = 'python';
-                    }
-
                     if (type === 'static') {
                         fs.writeFileSync(path.join(targetDir, 'hc-static-server.js'), `
-                            const express = require('express');
-                            const app = express();
-                            app.use(express.static(__dirname));
-                            app.listen(process.env.PORT);
-                        `);
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+http.createServer((req, res) => {
+    let filePath = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
+    fs.readFile(filePath, (err, data) => {
+        if (err) { res.writeHead(404); res.end(); return; }
+        res.writeHead(200); res.end(data);
+    });
+}).listen(process.env.PORT);`);
                         pm2Config.script = path.join(targetDir, 'hc-static-server.js');
                     } else if (type === 'php') {
-                        // Use PM2 to start php built-in server
                         pm2Config.script = 'php';
                         pm2Config.args = ['-S', `localhost:${port}`, '-t', targetDir];
                         pm2Config.interpreter = 'none';
                     }
 
                     pm2.start(pm2Config, (err) => {
-                        if (err) {
-                            console.error('PM2 Start Error:', err);
-                            return res.status(500).json({ message: 'PM2 start error' });
-                        }
+                        if (err) return res.status(500).json({ message: 'PM2 start error' });
 
                         db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route, user_id, memory_limit, env_vars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                             [appName, type, port, 'running', pm2Config.script, `/${appName}`, req.user.id, req.body.memoryLimit || null, req.body.envVars || null],
-                            (err) => {
-                                if (err) console.error('DB Insert Error:', err);
-                                // Clean up uploaded ZIP
+                            () => {
                                 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-                                res.json({
-                                    message: 'App deployed and running',
-                                    name: appName,
-                                    url: `/${appName}`,
-                                    port: port
-                                });
+                                res.json({ message: 'App deployed and running', name: appName, url: `/${appName}`, port: port });
                             }
                         );
                     });
@@ -706,8 +678,8 @@ app.post('/api/deploy', authenticateToken, upload.single('appZip'), async (req, 
             }
         });
     } catch (e) {
-        console.error('Deployment error:', e);
-        res.status(500).json({ message: 'Deployment failed' });
+        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+        res.status(500).json({ message: 'Deployment failed: ' + e.message });
     }
 });
 
@@ -720,21 +692,15 @@ app.get('/api/apps/:name/logs', authenticateToken, (req, res) => {
         if (err || !appRecord) return res.status(404).json({ message: 'App not found or access denied' });
 
         const logPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-out.log`);
-        const errorLogPath = path.join(process.env.HOME || process.env.USERPROFILE, '.pm2', 'logs', `${name}-error.log`);
-
         if (download) {
-            if (fs.existsSync(logPath)) {
-                res.download(logPath);
-            } else {
-                res.status(404).send('Log file not found');
-            }
+            if (fs.existsSync(logPath)) res.download(logPath);
+            else res.status(404).send('Log file not found');
             return;
         }
 
         try {
             const out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-limit) : '';
-            const err = fs.existsSync(errorLogPath) ? fs.readFileSync(errorLogPath, 'utf8').slice(-limit) : '';
-            res.json({ out, err });
+            res.json({ out });
         } catch (e) {
             res.status(500).json({ message: 'Error reading logs' });
         }
@@ -745,22 +711,13 @@ app.post('/api/apps/:name/logs/clear', authenticateToken, (req, res) => {
     const { name } = req.params;
     db.get(`SELECT * FROM apps WHERE name = ? AND user_id = ?`, [name, req.user.id], (err, appRecord) => {
         if (err || !appRecord) return res.status(404).json({ message: 'App not found' });
-
-        pm2.connect((err) => {
-            if (err) return res.status(500).json({ message: 'PM2 error' });
-            pm2.flush(name, (err) => {
-                res.json({ message: 'Logs cleared' });
-            });
-        });
+        pm2.connect(() => { pm2.flush(name, () => { res.json({ message: 'Logs cleared' }); }); });
     });
 });
 
 // WebSocket Monitoring
-pm2.connect(() => {}); // Ensure PM2 is connected for monitoring
-
+pm2.connect(() => {});
 io.on('connection', (socket) => {
-    console.log('Client connected to monitoring');
-
     const interval = setInterval(async () => {
         try {
             const cpu = await si.currentLoad();
@@ -769,32 +726,13 @@ io.on('connection', (socket) => {
             const processes = await new Promise((resolve) => {
                 pm2.list((err, list) => {
                     if (err) return resolve([]);
-                    resolve(list.map(p => ({
-                        name: p.name,
-                        cpu: p.monit.cpu,
-                        memory: p.monit.memory
-                    })));
+                    resolve(list.map(p => ({ name: p.name, cpu: p.monit.cpu, memory: p.monit.memory })));
                 });
             });
-
-            socket.emit('stats', {
-                cpu: cpu.currentLoad,
-                mem: (mem.active / mem.total) * 100,
-                memUsed: mem.active,
-                memTotal: mem.total,
-                disk: disk[0] ? disk[0].use : 0,
-                apps: processes,
-                uptime: os.uptime()
-            });
-        } catch (e) {
-            console.error('Monitoring error:', e);
-        }
+            socket.emit('stats', { cpu: cpu.currentLoad, mem: (mem.active / mem.total) * 100, disk: disk[0] ? disk[0].use : 0, apps: processes, uptime: os.uptime() });
+        } catch (e) {}
     }, 2000);
-
-    socket.on('disconnect', () => {
-        clearInterval(interval);
-        console.log('Client disconnected from monitoring');
-    });
+    socket.on('disconnect', () => { clearInterval(interval); });
 });
 
 // WebSocket Upgrade Proxy support
