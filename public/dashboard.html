@@ -34,7 +34,7 @@
             <div id="statusIndicator" class="badge bg-success">Online</div>
         </div>
 
-        <div class="row g-3 mb-4">
+        <div class="row g-3 mb-2">
             <div class="col-6">
                 <div class="stat-card">
                     <i class="fas fa-microchip stat-icon"></i>
@@ -47,6 +47,23 @@
                     <i class="fas fa-memory stat-icon"></i>
                     <div class="stat-value" id="memVal">0%</div>
                     <div class="stat-label">RAM Usage</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3 mb-4" id="termuxStats" style="display: none;">
+            <div class="col-6">
+                <div class="stat-card">
+                    <i class="fas fa-battery-three-quarters stat-icon text-success"></i>
+                    <div class="stat-value" id="battVal">-%</div>
+                    <div class="stat-label">Battery Level</div>
+                </div>
+            </div>
+            <div class="col-6">
+                <div class="stat-card">
+                    <i class="fas fa-wifi stat-icon text-info"></i>
+                    <div class="stat-value" id="wifiVal">-</div>
+                    <div class="stat-label">WiFi Status</div>
                 </div>
             </div>
         </div>
@@ -71,6 +88,12 @@
         socket.on('stats', (data) => {
             document.getElementById('cpuVal').innerText = \`\${data.cpu.toFixed(1)}%\`;
             document.getElementById('memVal').innerText = \`\${data.mem.toFixed(1)}%\`;
+
+            if (data.termux && data.termux.battery) {
+                document.getElementById('termuxStats').style.display = 'flex';
+                document.getElementById('battVal').innerText = `${data.termux.battery.percentage}%`;
+                document.getElementById('wifiVal').innerText = data.termux.wifi.supplicant_state || 'Online';
+            }
 
             const appList = document.getElementById('appList');
             if (data.apps && data.apps.length > 0) {

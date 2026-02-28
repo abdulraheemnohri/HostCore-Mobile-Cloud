@@ -4,6 +4,7 @@ const fs = require('fs');
 const pm2 = require('pm2');
 const AdmZip = require('adm-zip');
 const { db } = require('./db');
+const { sendNotification } = require('./termux');
 
 async function deployApp(req, res) {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
@@ -51,6 +52,7 @@ function startApp(appName, type, entryPoint, port, targetDir, userId, res, zipPa
             db.run(`INSERT OR REPLACE INTO apps (name, type, port, status, path, route, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [appName, type, port, 'running', entryPoint, `/${appName}`, userId], () => {
                 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+                sendNotification('Deployment Success', `Application ${appName} is now live on port ${port}`);
                 res.json({ message: 'App deployed', name: appName, port, url: `/${appName}` });
             });
         });

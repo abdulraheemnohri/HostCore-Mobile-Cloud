@@ -1,6 +1,7 @@
 const si = require('systeminformation');
 const pm2 = require('pm2');
 const os = require('os');
+const { getTermuxStats } = require('./termux');
 
 function initMonitoring(io) {
     pm2.connect(() => {});
@@ -20,12 +21,14 @@ function initMonitoring(io) {
                         })));
                     });
                 });
+                const termux = getTermuxStats();
                 socket.emit('stats', {
                     cpu: cpu.currentLoad,
                     mem: (mem.active / mem.total) * 100,
                     disk: disk[0] ? disk[0].use : 0,
                     apps: processes,
-                    uptime: os.uptime()
+                    uptime: os.uptime(),
+                    termux: termux
                 });
             } catch (e) {}
         }, 2000);

@@ -5,6 +5,7 @@ const pm2 = require('pm2');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { showToast } = require('../services/termux');
 
 // Get all apps
 router.get('/', (req, res) => {
@@ -22,7 +23,10 @@ router.post('/:name/start', (req, res) => {
         pm2.connect((err) => {
             pm2.start({ name: row.name, script: row.path, cwd: path.dirname(row.path), env: { PORT: row.port } }, (err) => {
                 if (err) return res.status(500).json({ message: 'Start failed' });
-                db.run(`UPDATE apps SET status = 'running' WHERE name = ?`, [name], () => res.json({ message: 'Started' }));
+                db.run(`UPDATE apps SET status = 'running' WHERE name = ?`, [name], () => {
+                    showToast(`App ${name} started`);
+                    res.json({ message: 'Started' });
+                });
             });
         });
     });
