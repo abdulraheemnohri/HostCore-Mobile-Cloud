@@ -1,39 +1,25 @@
-const pkg = require('./package.json');
 const fs = require('fs');
-const path = require('path');
+const { execSync } = require('child_process');
 
-console.log('Checking dependencies...');
+function check() {
+    console.log('--- HostCore Pre-flight Check ---');
+    const bins = ['node', 'pm2', 'mariadb', 'psql', 'python3', 'pip'];
+    bins.forEach(bin => {
+        try {
+            execSync(`which ${bin}`);
+            console.log(`[OK] ${bin}`);
+        } catch (e) {
+            console.log(`[MISSING] ${bin}`);
+        }
+    });
 
-const missing = [];
-Object.keys(pkg.dependencies).forEach(dep => {
-    try {
-        require.resolve(dep);
-    } catch (e) {
-        missing.push(dep);
-    }
-});
-
-if (missing.length > 0) {
-    console.error('Missing dependencies:', missing.join(', '));
-    console.log('Attempting to install missing packages...');
-    const { execSync } = require('child_process');
-    try {
-        execSync('npm install', { stdio: 'inherit' });
-        console.log('Dependencies installed successfully.');
-    } catch (e) {
-        console.error('Failed to install dependencies automatically. Please run "npm install" manually.');
-        process.exit(1);
-    }
-} else {
-    console.log('All dependencies are present.');
+    const dirs = ['apps', 'uploads', 'backups', 'logs'];
+    dirs.forEach(dir => {
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir);
+            console.log(`[CREATED] ${dir}/`);
+        }
+    });
 }
 
-// Native module verification
-try {
-    const sqlite3 = require('sqlite3');
-    console.log('Native module sqlite3 verified.');
-} catch (e) {
-    console.error('CRITICAL: Native module sqlite3 failed to load:', e.message);
-    console.log('Please run ./fix-termux.sh to fix library issues.');
-    process.exit(1);
-}
+check();

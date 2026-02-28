@@ -1,38 +1,34 @@
-#!/bin/bash
+#!/data/data/com.termux/files/usr/bin/bash
+# Refined install.sh for HostCore
 
-# HostCore Mobile Cloud - One Command Installer for Termux
-# Usage: bash <(curl -s https://raw.githubusercontent.com/abdulraheemnohri/HostCore-Mobile-Cloud/main/install.sh)
+set -e
+echo "🚀 Initializing HostCore Pro Installation for Termux..."
 
-echo "--- HostCore Mobile Cloud Installer ---"
+# Update and install core packages
+pkg update && pkg upgrade -y
+pkg install -y nodejs-lts mariadb postgresql build-essential python3 python-pip binutils zip unzip curl lsof
 
-# 1. Update packages
-echo "[1/5] Updating Termux packages..."
-pkg update -y && pkg upgrade -y
+# Fix for common native library issues
+mkdir -p $PREFIX/lib
+[ ! -f $PREFIX/lib/libstdc++.so.6 ] && ln -s $PREFIX/lib/libstdc++.so $PREFIX/lib/libstdc++.so.6 || true
 
-# 2. Install essential dependencies
-echo "[2/5] Installing core dependencies (Node.js, Git, MariaDB, build-essential)..."
-pkg install -y nodejs git mariadb postgresql tar curl build-essential binutils libc++
+# Install PM2 and dependencies
+npm install -g pm2
+npm install
 
-# 3. Clone Repository
-echo "[3/5] Cloning HostCore repository..."
-if [ -d "HostCore-Mobile-Cloud" ]; then
-    echo "Directory already exists. Updating..."
-    cd HostCore-Mobile-Cloud && git pull
-else
-    git clone https://github.com/abdulraheemnohri/HostCore-Mobile-Cloud.git
-    cd HostCore-Mobile-Cloud
-fi
+# Setup folders
+mkdir -p apps uploads backups logs
 
-# 4. Install NPM packages
-echo "[4/5] Installing Node.js packages (Building from source)..."
-# Force build native modules in Termux environment
-npm install --build-from-source
+# Setup databases
+echo "🔧 Configuring MariaDB..."
+mysql_install_db
+mysqld_safe --datadir=$PREFIX/var/lib/mysql > /dev/null 2>&1 &
+sleep 5
+mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'hostcore';" || true
 
-# 5. Finalize
-echo "[5/5] Setup complete!"
-echo ""
-echo "To start HostCore Mobile Cloud, run:"
-echo "cd HostCore-Mobile-Cloud && ./start.sh"
-echo ""
-echo "Dashboard will be available at http://localhost:3000"
-echo "---------------------------------------"
+echo "🔧 Configuring PostgreSQL..."
+mkdir -p $PREFIX/var/lib/postgresql
+initdb $PREFIX/var/lib/postgresql || true
+pg_ctl -D $PREFIX/var/lib/postgresql start || true
+
+echo "✅ HostCore Pro Installation Complete!"

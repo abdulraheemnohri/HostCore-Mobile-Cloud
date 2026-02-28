@@ -1,30 +1,16 @@
-#!/bin/bash
-echo "Starting HostCore Mobile Cloud..."
+#!/data/data/com.termux/files/usr/bin/bash
+# Refined start.sh for HostCore
 
-# Ensure pm2 is available
-if ! command -v pm2 &> /dev/null
-then
-    echo "PM2 could not be found. Using local version..."
-    PM2_BIN="./node_modules/.bin/pm2"
-else
-    PM2_BIN="pm2"
-fi
+echo "🚀 Starting HostCore Pro Service..."
 
-# Create required directories
-mkdir -p apps uploads backups logs
+# Kill any existing processes on PORT 3000
+fuser -k 3000/tcp 2>/dev/null || true
 
-# Check dependencies
-node check-deps.js
+# Start HostCore server with PM2
+pm2 start server.js --name hostcore-pro --update-env || pm2 restart hostcore-pro
 
-# Fix Termux paths for Node.js modules
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PREFIX/lib
+# Request Termux wake-lock to keep services alive
+termux-wake-lock || echo "⚠️ Wake-lock not available (non-Termux)"
 
-# Start the main server with PM2
-# If PM2 fails to resolve its own modules, we provide a fallback
-if ! $PM2_BIN start ecosystem.config.js; then
-    echo "PM2 failed to start. Falling back to direct node execution..."
-    node server.js
-fi
-
-echo "HostCore started. Visit http://localhost:3000"
-$PM2_BIN logs hostcore
+echo "✅ HostCore Pro is running!"
+pm2 logs hostcore-pro

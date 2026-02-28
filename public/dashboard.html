@@ -3,136 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HostCore - Dashboard</title>
+    <title>HostCore Pro | Mobile Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        .card { border: none; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        .nav-link.active { font-weight: bold; color: #007bff !important; }
-        .stat-value { font-size: 1.5rem; font-weight: bold; }
+        :root { --primary-color: #0d6efd; --bg-dark: #121212; --card-bg: #1e1e1e; }
+        body { background: var(--bg-dark); color: #fff; font-family: 'Inter', sans-serif; padding-bottom: 70px; }
+        .nav-bottom { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card-bg); height: 60px; display: flex; align-items: center; justify-content: space-around; border-top: 1px solid #333; z-index: 1000; }
+        .nav-bottom a { color: #888; text-decoration: none; font-size: 1.2rem; display: flex; flex-direction: column; align-items: center; transition: 0.3s; }
+        .nav-bottom a.active { color: var(--primary-color); }
+        .nav-bottom a span { font-size: 0.65rem; font-weight: 600; }
+        .stat-card { background: var(--card-bg); border-radius: 12px; padding: 1.5rem; border: 1px solid #333; margin-bottom: 1rem; transition: 0.3s; }
+        .stat-card:active { transform: scale(0.98); }
+        .stat-icon { font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
+        .stat-value { font-size: 1.5rem; font-weight: 700; }
+        .stat-label { font-size: 0.8rem; color: #888; }
+        .chart-container { background: var(--card-bg); border-radius: 12px; padding: 1rem; border: 1px solid #333; }
+        .app-item { background: var(--card-bg); border-radius: 12px; padding: 1rem; border: 1px solid #333; display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
+        .app-info { display: flex; flex-direction: column; }
+        .app-name { font-weight: 700; margin-bottom: 0.2rem; }
+        .app-meta { font-size: 0.75rem; color: #888; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+        .status-running { background: #28a745; box-shadow: 0 0 8px #28a745; }
     </style>
 </head>
-<body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-        <div class="container">
-            <a class="navbar-brand" href="#">HostCore Mobile</a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
-            </button>
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav me-auto">
-                    <li class="nav-item"><a class="nav-link active" href="dashboard.html">Dashboard</a></li>
-                    <li class="nav-item"><a class="nav-link" href="deploy.html">Deploy</a></li>
-                    <li class="nav-item"><a class="nav-link" href="apps.html">Apps</a></li>
-                    <li class="nav-item"><a class="nav-link" href="db.html">Database</a></li>
-                    <li class="nav-item"><a class="nav-link" href="system.html">System Info</a></li>
-                    <li class="nav-item"><a class="nav-link" href="settings.html">Settings</a></li>
-                </ul>
-                <button class="btn btn-outline-light btn-sm" onclick="logout()">Logout</button>
-            </div>
+<body>
+    <div class="container pt-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4 class="fw-bold mb-0">HostCore <span class="text-primary">PRO</span></h4>
+            <div id="statusIndicator" class="badge bg-success">Online</div>
         </div>
-    </nav>
 
-    <div class="container">
         <div class="row g-3 mb-4">
-            <div class="col-6 col-md-3">
-                <div class="card p-3 text-center">
-                    <div class="text-muted small">CPU Usage</div>
-                    <div id="cpu-stat" class="stat-value text-primary">0%</div>
+            <div class="col-6">
+                <div class="stat-card">
+                    <i class="fas fa-microchip stat-icon"></i>
+                    <div class="stat-value" id="cpuVal">0%</div>
+                    <div class="stat-label">CPU Load</div>
                 </div>
             </div>
-            <div class="col-6 col-md-3">
-                <div class="card p-3 text-center">
-                    <div class="text-muted small">RAM Usage</div>
-                    <div id="mem-stat" class="stat-value text-success">0%</div>
-                </div>
-            </div>
-            <div class="col-6 col-md-3">
-                <div class="card p-3 text-center">
-                    <div class="text-muted small">Active Apps</div>
-                    <div id="apps-stat" class="stat-value text-info">0</div>
-                </div>
-            </div>
-            <div class="col-6 col-md-3">
-                <div class="card p-3 text-center">
-                    <div class="text-muted small">Disk Usage</div>
-                    <div id="disk-stat" class="stat-value text-danger">0%</div>
-                </div>
-            </div>
-            <div class="col-12 col-md-3">
-                <div class="card p-3 text-center">
-                    <div class="text-muted small">System Uptime</div>
-                    <div id="uptime-stat" class="stat-value text-warning" style="font-size: 1.1rem;">--</div>
+            <div class="col-6">
+                <div class="stat-card">
+                    <i class="fas fa-memory stat-icon"></i>
+                    <div class="stat-value" id="memVal">0%</div>
+                    <div class="stat-label">RAM Usage</div>
                 </div>
             </div>
         </div>
 
-        <div class="card p-3 mb-4">
-            <h5 class="mb-3">System Load (Live)</h5>
-            <div style="height: 300px;">
-                <canvas id="loadChart"></canvas>
-            </div>
+        <h6 class="fw-bold mb-3"><i class="fas fa-rocket me-2"></i>Running Applications</h6>
+        <div id="appList">
+            <div class="text-center text-muted py-5">No apps running</div>
         </div>
     </div>
 
+    <div class="nav-bottom">
+        <a href="dashboard.html" class="active"><i class="fas fa-home"></i><span>Home</span></a>
+        <a href="deploy.html"><i class="fas fa-plus-circle"></i><span>Deploy</span></a>
+        <a href="apps.html"><i class="fas fa-th-list"></i><span>Apps</span></a>
+        <a href="db.html"><i class="fas fa-database"></i><span>DB</span></a>
+        <a href="settings.html"><i class="fas fa-cog"></i><span>Settings</span></a>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
     <script>
-        if (!localStorage.getItem('token')) window.location.href = '/login.html';
-
-        function logout() {
-            localStorage.removeItem('token');
-            window.location.href = '/login.html';
-        }
-
-        const ctx = document.getElementById('loadChart').getContext('2d');
-        const loadChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    { label: 'CPU %', data: [], borderColor: '#0d6efd', tension: 0.4, fill: false },
-                    { label: 'RAM %', data: [], borderColor: '#198754', tension: 0.4, fill: false },
-                    { label: 'Disk %', data: [], borderColor: '#dc3545', tension: 0.4, fill: false }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: { y: { beginAtZero: true, max: 100 } }
-            }
-        });
-
-        function formatUptime(seconds) {
-            const d = Math.floor(seconds / (3600*24));
-            const h = Math.floor(seconds % (3600*24) / 3600);
-            const m = Math.floor(seconds % 3600 / 60);
-            const s = Math.floor(seconds % 60);
-            return `${d}d ${h}h ${m}m ${s}s`;
-        }
-
         const socket = io();
         socket.on('stats', (data) => {
-            document.getElementById('cpu-stat').innerText = data.cpu.toFixed(1) + '%';
-            document.getElementById('mem-stat').innerText = data.mem.toFixed(1) + '%';
-            document.getElementById('disk-stat').innerText = data.disk.toFixed(1) + '%';
-            document.getElementById('apps-stat').innerText = data.apps.length;
-            document.getElementById('uptime-stat').innerText = formatUptime(data.uptime);
+            document.getElementById('cpuVal').innerText = \`\${data.cpu.toFixed(1)}%\`;
+            document.getElementById('memVal').innerText = \`\${data.mem.toFixed(1)}%\`;
 
-            const now = new Date().toLocaleTimeString();
-            loadChart.data.labels.push(now);
-            loadChart.data.datasets[0].data.push(data.cpu);
-            loadChart.data.datasets[1].data.push(data.mem);
-            loadChart.data.datasets[2].data.push(data.disk);
-
-            if (loadChart.data.labels.length > 20) {
-                loadChart.data.labels.shift();
-                loadChart.data.datasets[0].data.shift();
-                loadChart.data.datasets[1].data.shift();
-                loadChart.data.datasets[2].data.shift();
+            const appList = document.getElementById('appList');
+            if (data.apps && data.apps.length > 0) {
+                appList.innerHTML = data.apps.map(app => \`
+                    <div class="app-item">
+                        <div class="app-info">
+                            <span class="app-name">\${app.name}</span>
+                            <span class="app-meta"><span class="status-dot status-running"></span>Running • \${app.cpu}% CPU</span>
+                        </div>
+                        <a href="/\${app.name}" target="_blank" class="btn btn-sm btn-outline-primary rounded-pill"><i class="fas fa-external-link-alt"></i></a>
+                    </div>
+                \`).join('');
+            } else {
+                appList.innerHTML = '<div class="text-center text-muted py-5">No apps running</div>';
             }
-            loadChart.update('none');
         });
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
